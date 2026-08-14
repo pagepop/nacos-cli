@@ -12,7 +12,7 @@ A powerful command-line tool for managing Nacos configuration center and AI skil
 - 🔄 Profile-aware skill synchronization across local agents and Nacos
 - 🌐 Namespace support for multi-environment management
 - 📦 Batch operations - upload all skills and agent specs at once
-- 🧾 Structured output - `--output json` on list/describe for scripting
+- 🧾 Structured output - raw/JSON config output and `--output json` on list/describe
 
 ## Installation
 
@@ -494,12 +494,28 @@ nacos> config-list --data-id myconfig --page 2
 #### Get Configuration
 
 ```bash
-# CLI mode
+# CLI mode outputs the raw configuration content by default
 nacos-cli config-get myconfig DEFAULT_GROUP -s 127.0.0.1:8848 -u nacos -p nacos
+
+# Show a human-readable header
+nacos-cli config-get myconfig DEFAULT_GROUP --output pretty
+
+# Return dataId, group, and content as JSON
+nacos-cli config-get myconfig DEFAULT_GROUP --output json
 
 # Terminal mode
 nacos> config-get myconfig DEFAULT_GROUP
 ```
+
+With an existing profile or explicit connection flags, non-interactive
+`config-get` keeps stdout machine-readable: `raw` writes the configuration
+content byte-for-byte without adding a header or trailing newline. Request and
+login diagnostics are written to stderr. Interactive terminal mode keeps the
+human-readable presentation.
+
+`raw` and `json` never start interactive profile setup. If the selected profile
+is missing or incomplete, configure it with `nacos-cli profile edit <name>` or
+pass explicit connection flags; the command fails with empty stdout.
 
 #### Set Configuration
 
@@ -721,6 +737,8 @@ MIT License
 
 ### Next Release
 
+- Changed non-interactive `config-get` to raw output by default and added explicit
+  `--output raw|pretty|json` formats
 - Fixed `skill-upload` and `agentspec-upload` creating ZIP archives with an
   extra directory prefix, causing server-side extraction failures
   ([#46](https://github.com/nacos-group/nacos-cli/issues/46))

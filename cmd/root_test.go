@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nacos-group/nacos-cli/internal/client"
@@ -462,6 +463,78 @@ func TestPersistentPreRunAllowsModeLocalWithMissingExplicitProfile(t *testing.T)
 	}
 }
 
+func TestConfigGetUsesMachineReadableOutput(t *testing.T) {
+	resetRootConfigForTest(t)
+
+	tests := []struct {
+		name   string
+		format configGetOutputFormat
+		want   bool
+	}{
+		{name: "raw", format: configGetOutputRaw, want: true},
+		{name: "json", format: configGetOutputJSON, want: true},
+		{name: "pretty", format: configGetOutputPretty, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configGetOutput.format = tt.format
+			if got := configGetUsesMachineReadableOutput(getConfigCmd); got != tt.want {
+				t.Fatalf("configGetUsesMachineReadableOutput() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+
+	configGetOutput.format = configGetOutputRaw
+	if configGetUsesMachineReadableOutput(&cobra.Command{Use: "skill-list"}) {
+		t.Fatal("non-config-get command should not require machine-readable profile handling")
+	}
+}
+
+func TestLoadExistingConfigGetProfile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	writeProfile := func(t *testing.T, profile, content string) {
+		t.Helper()
+		configPath, err := config.GetProfileConfigPath(profile)
+		if err != nil {
+			t.Fatalf("GetProfileConfigPath() error = %v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+	}
+
+	t.Run("missing profile", func(t *testing.T) {
+		_, err := loadExistingConfigGetProfile("missing")
+		if err == nil || !strings.Contains(err.Error(), "config file not found") {
+			t.Fatalf("loadExistingConfigGetProfile() error = %v, want config file not found", err)
+		}
+	})
+
+	t.Run("incomplete profile", func(t *testing.T) {
+		writeProfile(t, "incomplete", "host: 127.0.0.1\nauthType: nacos\nusername: nacos\n")
+		_, err := loadExistingConfigGetProfile("incomplete")
+		if err == nil || !strings.Contains(err.Error(), "missing: password") {
+			t.Fatalf("loadExistingConfigGetProfile() error = %v, want missing password", err)
+		}
+	})
+
+	t.Run("complete profile", func(t *testing.T) {
+		writeProfile(t, "complete", "host: 127.0.0.1\nport: 8848\nauthType: none\n")
+		loaded, err := loadExistingConfigGetProfile("complete")
+		if err != nil {
+			t.Fatalf("loadExistingConfigGetProfile() error = %v", err)
+		}
+		if loaded.Host != "127.0.0.1" || loaded.Port != 8848 {
+			t.Fatalf("loaded endpoint = %s:%d, want 127.0.0.1:8848", loaded.Host, loaded.Port)
+		}
+	})
+}
+
 func skillSyncTestCommand(name string) *cobra.Command {
 	root := &cobra.Command{Use: "nacos-cli"}
 	sync := &cobra.Command{Use: "skill-sync"}
@@ -491,6 +564,7 @@ func resetRootConfigForTest(t *testing.T) {
 	originalConfigFile := configFile
 	originalProfileName := profileName
 	originalVerbose := verbose
+	originalConfigGetOutput := configGetOutput.format
 
 	serverAddr = ""
 	host = ""
@@ -509,6 +583,7 @@ func resetRootConfigForTest(t *testing.T) {
 	configFile = ""
 	profileName = ""
 	verbose = false
+	configGetOutput.format = configGetOutputRaw
 
 	t.Cleanup(func() {
 		serverAddr = originalServerAddr
@@ -528,5 +603,6 @@ func resetRootConfigForTest(t *testing.T) {
 		configFile = originalConfigFile
 		profileName = originalProfileName
 		verbose = originalVerbose
+		configGetOutput.format = originalConfigGetOutput
 	})
 }

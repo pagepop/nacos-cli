@@ -259,3 +259,118 @@ func TestPublishConfigWithOptionsUsesConfigType(t *testing.T) {
 		})
 	}
 }
+
+func TestGetConfigUsesStrictV3Contract(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/nacos/v3/client/cs/config" {
+			t.Fatalf("path = %q, want /nacos/v3/client/cs/config", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("dataId"); got != "application.yaml" {
+			t.Fatalf("dataId = %q, want application.yaml", got)
+		}
+		if got := r.URL.Query().Get("groupName"); got != "DEFAULT_GROUP" {
+			t.Fatalf("groupName = %q, want DEFAULT_GROUP", got)
+		}
+		if got := r.URL.Query().Get("namespaceId"); got != "test-namespace" {
+			t.Fatalf("namespaceId = %q, want test-namespace", got)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"success","data":{"content":"key: value\r\n"}}`))
+	}))
+	defer server.Close()
+
+	c := newNoAuthTestNacosClient(t, server.URL, "test-namespace")
+	content, err := c.GetConfig("application.yaml", "DEFAULT_GROUP")
+	if err != nil {
+		t.Fatalf("GetConfig() error = %v", err)
+	}
+	if content != "key: value\r\n" {
+		t.Fatalf("GetConfig() content = %q, want %q", content, "key: value\r\n")
+	}
+}
+
+func TestGetConfigRejectsNonContractResponses(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		wantErr  string
+	}{
+		{
+			name:     "non-JSON response",
+			response: "<html>gateway page</html>",
+			wantErr:  "decode get config response",
+		},
+		{
+			name:     "server error envelope",
+			response: `{"code":500,"message":"server error","data":null}`,
+			wantErr:  "get config failed: code=500",
+		},
+		{
+			name:     "string data",
+			response: `{"code":0,"message":"success","data":"key: value"}`,
+			wantErr:  "decode get config response data",
+		},
+		{
+			name:     "null data",
+			response: `{"code":0,"message":"success","data":null}`,
+			wantErr:  "get config response data is missing",
+		},
+		{
+			name:     "missing content",
+			response: `{"code":0,"message":"success","data":{"contentType":"yaml"}}`,
+			wantErr:  "get config response data is missing content",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.response))
+			}))
+			defer server.Close()
+
+			c := newNoAuthTestNacosClient(t, server.URL, "public")
+			_, err := c.GetConfig("application.yaml", "DEFAULT_GROUP")
+			if err == nil {
+				t.Fatal("GetConfig() should reject a non-contract response")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("GetConfig() error = %q, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGetConfigPreservesValidEmptyContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"success","data":{"content":""}}`))
+	}))
+	defer server.Close()
+
+	c := newNoAuthTestNacosClient(t, server.URL, "public")
+	content, err := c.GetConfig("empty.txt", "DEFAULT_GROUP")
+	if err != nil {
+		t.Fatalf("GetConfig() error = %v", err)
+	}
+	if content != "" {
+		t.Fatalf("GetConfig() content = %q, want empty", content)
+	}
+}
+
+func newNoAuthTestNacosClient(t *testing.T, serverURL, namespace string) *NacosClient {
+	t.Helper()
+	c, err := NewNacosClient(
+		strings.TrimPrefix(serverURL, "http://"),
+		namespace,
+		AuthTypeNone,
+		"", "", "", "", "", "", "",
+		"http",
+	)
+	if err != nil {
+		t.Fatalf("NewNacosClient() error = %v", err)
+	}
+	return c
+}
