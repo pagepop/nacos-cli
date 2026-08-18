@@ -38,7 +38,7 @@ Pin an exact PagePop version when reproducibility is required:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pagepop/nacos-cli/main/scripts/install.sh \
-  | bash -s -- --version 1.1.4-pagepop.1
+  | bash -s -- --version 1.1.4-pagepop.2
 ```
 
 Use a different absolute installation directory when needed:
@@ -515,15 +515,45 @@ nacos-cli config-get myconfig DEFAULT_GROUP --output json
 nacos> config-get myconfig DEFAULT_GROUP
 ```
 
-With an existing profile or explicit connection flags, non-interactive
-`config-get` keeps stdout machine-readable: `raw` writes the configuration
-content byte-for-byte without adding a header or trailing newline. Request and
-login diagnostics are written to stderr. Interactive terminal mode keeps the
-human-readable presentation.
+With an existing profile, a complete `NACOS_*` connection, or explicit
+connection flags, non-interactive `config-get` keeps stdout machine-readable:
+`raw` writes the configuration content byte-for-byte without adding a header
+or trailing newline. Request and login diagnostics are written to stderr.
+Interactive terminal mode keeps the human-readable presentation.
 
 `raw` and `json` never start interactive profile setup. If the selected profile
-is missing or incomplete, configure it with `nacos-cli profile edit <name>` or
+or environment connection is missing or incomplete, configure the profile or
 pass explicit connection flags; the command fails with empty stdout.
+
+Automation that handles a temporary bearer token should use strict mode. It
+requires every connection field explicitly, ignores profiles and `NACOS_*`
+environment variables, disables endpoint defaults, and reads the token only
+from piped stdin:
+
+```bash
+printf '%s' "$NACOS_TOKEN" | nacos-cli config-get myconfig DEFAULT_GROUP \
+  --output raw \
+  --strict \
+  --token-stdin \
+  --host nacos.example.com \
+  --port 443 \
+  --scheme https \
+  --namespace team \
+  --auth-type token
+```
+
+Do not pass a temporary token through `--token` or save it in a profile. Tools
+can verify this contract without reading profiles or contacting Nacos:
+
+```bash
+nacos-cli capabilities
+```
+
+The stable schema is:
+
+```json
+{"schemaVersion":1,"capabilities":["auth.token-stdin.v1","config-get.raw.v1","config-get.strict-explicit.v1"]}
+```
 
 #### Set Configuration
 
@@ -745,6 +775,12 @@ MIT License
 
 ### Next Release
 
+- Added a stable `capabilities` JSON command for dependency validation
+- Added strict `config-get` automation with explicit connection flags and
+  bearer-token input from piped stdin; profiles, environment configuration,
+  endpoint defaults, and argv tokens are rejected in this mode
+- Fixed partial `NACOS_*` environment values bypassing complete-profile
+  validation for raw/JSON `config-get`
 - Changed non-interactive `config-get` to raw output by default and added explicit
   `--output raw|pretty|json` formats
 - Fixed `skill-upload` and `agentspec-upload` creating ZIP archives with an

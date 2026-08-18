@@ -3,8 +3,12 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
+
+	"github.com/nacos-group/nacos-cli/internal/client"
+	"github.com/spf13/cobra"
 )
 
 func TestConfigGetOutputFlagDefaultsToRaw(t *testing.T) {
@@ -139,4 +143,166 @@ func TestRenderConfigGetRejectsUnknownFormat(t *testing.T) {
 	if err == nil {
 		t.Fatal("renderConfigGet() should reject an unknown format")
 	}
+}
+
+func TestPrepareStrictConfigGet(t *testing.T) {
+	resetRootConfigForTest(t)
+	command := strictConfigGetTestCommand(t, strings.NewReader("temporary-token\n"))
+
+	if err := prepareStrictConfigGet(command); err != nil {
+		t.Fatalf("prepareStrictConfigGet() error = %v", err)
+	}
+	if serverAddr != "t-nacos.pagepop.cn:443" {
+		t.Fatalf("serverAddr = %q, want t-nacos.pagepop.cn:443", serverAddr)
+	}
+	if scheme != "https" || namespace != "test-namespace" || authType != client.AuthTypeToken {
+		t.Fatalf("strict connection = scheme:%q namespace:%q authType:%q", scheme, namespace, authType)
+	}
+	if token != "temporary-token" {
+		t.Fatal("strict token was not read from stdin")
+	}
+
+	nacosClient := mustNewNacosClient()
+	request, err := nacosClient.NewAuthedRequest("GET", nacosClient.BaseURL(), nil)
+	if err != nil {
+		t.Fatalf("NewAuthedRequest() error = %v", err)
+	}
+	if got := request.Header.Get("Authorization"); got != "Bearer temporary-token" {
+		t.Fatalf("Authorization header = %q, want bearer token from stdin", got)
+	}
+}
+
+func TestPrepareStrictConfigGetRejectsUnsafeSources(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*cobra.Command)
+		want      string
+	}{
+		{
+			name: "missing explicit namespace",
+			configure: func(command *cobra.Command) {
+				command.Flags().Lookup("namespace").Changed = false
+			},
+			want: "requires explicit --namespace",
+		},
+		{
+			name: "argv token",
+			configure: func(command *cobra.Command) {
+				if err := command.Flags().Set("token", "argv-token"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "does not allow --token",
+		},
+		{
+			name: "profile",
+			configure: func(command *cobra.Command) {
+				if err := command.Flags().Set("profile", "pagepop-agent"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "does not allow --profile",
+		},
+		{
+			name: "non token auth",
+			configure: func(command *cobra.Command) {
+				authType = "nacos"
+			},
+			want: "requires --auth-type token",
+		},
+		{
+			name: "pretty output",
+			configure: func(command *cobra.Command) {
+				configGetOutput.format = configGetOutputPretty
+			},
+			want: "requires --output raw or --output json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetRootConfigForTest(t)
+			command := strictConfigGetTestCommand(t, strings.NewReader("temporary-token\n"))
+			tt.configure(command)
+			err := prepareStrictConfigGet(command)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("prepareStrictConfigGet() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadBearerToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		reader  io.Reader
+		want    string
+		wantErr string
+	}{
+		{name: "single line", reader: strings.NewReader("token-value\n"), want: "token-value"},
+		{name: "empty", reader: strings.NewReader(" \n"), wantErr: "empty token"},
+		{name: "embedded whitespace", reader: strings.NewReader("token value\n"), wantErr: "whitespace inside"},
+		{name: "too large", reader: strings.NewReader(strings.Repeat("x", maxStdinBearerTokenBytes+1)), wantErr: "exceeds"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := readBearerToken(tt.reader)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("readBearerToken() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("readBearerToken() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("readBearerToken() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func strictConfigGetTestCommand(t *testing.T, stdin io.Reader) *cobra.Command {
+	t.Helper()
+	command := &cobra.Command{Use: "config-get"}
+	for _, name := range []string{
+		"host",
+		"scheme",
+		"namespace",
+		"auth-type",
+		"config",
+		"profile",
+		"server",
+		"token",
+		"username",
+		"password",
+		"access-key",
+		"secret-key",
+		"security-token",
+	} {
+		command.Flags().String(name, "", "")
+	}
+	command.Flags().Int("port", 0, "")
+	for name, value := range map[string]string{
+		"host":      "t-nacos.pagepop.cn",
+		"port":      "443",
+		"scheme":    "https",
+		"namespace": "test-namespace",
+		"auth-type": "token",
+	} {
+		if err := command.Flags().Set(name, value); err != nil {
+			t.Fatalf("set --%s: %v", name, err)
+		}
+	}
+	host = "t-nacos.pagepop.cn"
+	port = 443
+	scheme = "https"
+	namespace = "test-namespace"
+	authType = "token"
+	configGetStrict = true
+	configGetTokenStdin = true
+	command.SetIn(stdin)
+	return command
 }

@@ -48,8 +48,29 @@ Examples:
   nacos-cli profile show    # Show default config
   nacos-cli profile show dev   # Show dev config`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		// Skip config loading for help, completion, and profile subcommands.
-		if cmd.Name() == "help" || cmd.Name() == "completion" || strings.HasPrefix(cmd.CommandPath(), "nacos-cli profile") {
+		// Skip config loading for commands that only describe local CLI behavior.
+		if cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == capabilitiesCmd.Name() || strings.HasPrefix(cmd.CommandPath(), "nacos-cli profile") {
+			return
+		}
+		if cmd.Name() == getConfigCmd.Name() && configGetTokenStdin && !configGetStrict {
+			fmt.Fprintln(os.Stderr, "Error: config-get --token-stdin requires --strict")
+			os.Exit(1)
+		}
+		if configGetUsesStrictExplicitConnection(cmd) {
+			if err := prepareStrictConfigGet(cmd); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			if verbose {
+				fmt.Fprintf(
+					os.Stderr,
+					"[info] config-get strict connection source=explicit scheme=%s serverAddr=%s namespace=%s authType=%s\n",
+					scheme,
+					serverAddr,
+					namespace,
+					authType,
+				)
+			}
 			return
 		}
 
@@ -86,12 +107,36 @@ Examples:
 			// Explicit config file specified
 			fileConfig, err = config.LoadConfig(configFile)
 			if err != nil {
+				if configGetUsesMachineReadableOutput(cmd) {
+					fmt.Fprintf(os.Stderr, "Error: config-get --output %s could not load --config: %v\n", configGetOutput.format, err)
+					os.Exit(1)
+				}
 				fmt.Fprintf(os.Stderr, "Warning: Failed to load config file: %v\n", err)
+			} else if configGetUsesMachineReadableOutput(cmd) {
+				if missing := fileConfig.GetMissingFields(); len(missing) > 0 {
+					fmt.Fprintf(os.Stderr, "Error: config-get --output %s requires a complete --config file (missing: %s)\n", configGetOutput.format, strings.Join(missing, ", "))
+					os.Exit(1)
+				}
 			}
 		} else if !hasCommandLineConfig {
 			// No command line config provided, use profile-based config
 			envName := effectiveProfile
-			if hasEnvConfig || skillSyncCommand {
+			if configGetUsesMachineReadableOutput(cmd) {
+				// Machine-readable output must resolve one complete source. An
+				// existing profile keeps priority over NACOS_* values, while a
+				// partial environment never reaches an endpoint default.
+				fileConfig, err = loadMachineReadableConfigGetSource(envName, profileName != "")
+				if err != nil {
+					fmt.Fprintf(
+						os.Stderr,
+						"Error: config-get --output %s requires a complete profile %q, complete NACOS_* connection, or explicit connection flags: %v\n",
+						configGetOutput.format,
+						config.NormalizeProfileName(envName),
+						err,
+					)
+					os.Exit(1)
+				}
+			} else if hasEnvConfig || skillSyncCommand {
 				configPath, pathErr := config.GetProfileConfigPath(envName)
 				if pathErr != nil {
 					fmt.Fprintf(os.Stderr, "Warning: Failed to resolve profile config path: %v\n", pathErr)
@@ -102,19 +147,6 @@ Examples:
 					}
 				} else if skillSyncCommand && profileName != "" && !isSkillSyncModeLocalCommand(cmd, args) {
 					fmt.Fprintf(os.Stderr, "Error: profile %q not found; create it with 'profile set' or pass --host/--port explicitly\n", profileName)
-					os.Exit(1)
-				}
-			} else if configGetUsesMachineReadableOutput(cmd) {
-				fileConfig, err = loadExistingConfigGetProfile(envName)
-				if err != nil {
-					fmt.Fprintf(
-						os.Stderr,
-						"Error: config-get --output %s requires a complete profile %q: %v; configure it with 'nacos-cli profile edit %s' or pass explicit connection flags\n",
-						configGetOutput.format,
-						config.NormalizeProfileName(envName),
-						err,
-						config.NormalizeProfileName(envName),
-					)
 					os.Exit(1)
 				}
 			} else {
@@ -318,6 +350,74 @@ func loadExistingConfigGetProfile(profile string) (*config.Config, error) {
 		return nil, fmt.Errorf("profile is incomplete (missing: %s)", strings.Join(missing, ", "))
 	}
 	return fileConfig, nil
+}
+
+// loadMachineReadableConfigGetSource preserves the normal profile-first
+// priority while requiring the selected source to be complete. A complete
+// NACOS_* connection remains supported when no explicit or existing profile is
+// selected; partial environment state never gets combined with endpoint
+// defaults.
+func loadMachineReadableConfigGetSource(profile string, explicitProfile bool) (*config.Config, error) {
+	profile = config.NormalizeProfileName(profile)
+	configPath, err := config.GetProfileConfigPath(profile)
+	if err != nil {
+		return nil, fmt.Errorf("resolve profile path: %w", err)
+	}
+	if _, statErr := os.Stat(configPath); statErr == nil {
+		return loadExistingConfigGetProfile(profile)
+	} else if !os.IsNotExist(statErr) {
+		return nil, fmt.Errorf("inspect profile: %w", statErr)
+	}
+	if explicitProfile {
+		return nil, fmt.Errorf("config file not found: %s", configPath)
+	}
+
+	environmentConfig, present, err := machineReadableEnvironmentConfig()
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return nil, fmt.Errorf("config file not found: %s", configPath)
+	}
+	if missing := environmentConfig.GetMissingFields(); len(missing) > 0 {
+		return nil, fmt.Errorf("NACOS_* connection is incomplete (missing: %s)", strings.Join(missing, ", "))
+	}
+	return environmentConfig, nil
+}
+
+func machineReadableEnvironmentConfig() (*config.Config, bool, error) {
+	rawHost := strings.TrimSpace(os.Getenv("NACOS_HOST"))
+	rawPort := strings.TrimSpace(os.Getenv("NACOS_PORT"))
+	rawNamespace := strings.TrimSpace(os.Getenv("NACOS_NAMESPACE"))
+	rawAuthType := strings.TrimSpace(os.Getenv("NACOS_AUTH_TYPE"))
+	rawScheme := strings.ToLower(strings.TrimSpace(os.Getenv("NACOS_SCHEME")))
+	present := rawHost != "" || rawPort != "" || rawNamespace != "" || rawAuthType != "" || rawScheme != ""
+	if !present {
+		return nil, false, nil
+	}
+
+	envPort := 0
+	if rawPort != "" {
+		parsedPort, err := strconv.Atoi(rawPort)
+		if err != nil || parsedPort <= 0 || parsedPort > 65535 {
+			return nil, true, fmt.Errorf("invalid NACOS_PORT value %q", rawPort)
+		}
+		envPort = parsedPort
+	}
+	normalizedAuthType, err := config.NormalizeAuthType(rawAuthType)
+	if err != nil {
+		return nil, true, err
+	}
+	if rawScheme != "" && rawScheme != "http" && rawScheme != "https" {
+		return nil, true, fmt.Errorf("invalid NACOS_SCHEME value %q", rawScheme)
+	}
+	return &config.Config{
+		Host:      rawHost,
+		Port:      envPort,
+		Scheme:    rawScheme,
+		Namespace: rawNamespace,
+		AuthType:  normalizedAuthType,
+	}, true, nil
 }
 
 func isSkillSyncModeLocalCommand(cmd *cobra.Command, args []string) bool {

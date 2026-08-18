@@ -353,6 +353,9 @@ var (
 		Parameters: []string{
 			"dataId          Required. Configuration data ID",
 			"group           Required. Configuration group name",
+			"--output         Output format: raw, pretty, or json",
+			"--strict         Require an explicit connection without profile/env/default fallback",
+			"--token-stdin    Read a temporary bearer token from piped stdin in strict mode",
 		},
 		Examples: []string{
 			"# Get a configuration",
@@ -360,6 +363,9 @@ var (
 			"",
 			"# Get a skill configuration",
 			"config-get skill.json skill_skill-creator",
+			"",
+			"# Strict mode reads the bearer token from piped stdin",
+			"config-get application.yaml DEFAULT_GROUP --output raw --strict --token-stdin --host nacos.example.com --port 443 --scheme https --namespace team --auth-type token",
 		},
 	}
 

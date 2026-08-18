@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -535,6 +536,85 @@ func TestLoadExistingConfigGetProfile(t *testing.T) {
 	})
 }
 
+func TestMachineReadableConfigGetEnvironmentCannotBypassProfileValidation(t *testing.T) {
+	tests := []struct {
+		name           string
+		profileContent string
+		want           string
+	}{
+		{
+			name: "missing profile with namespace environment",
+			want: "NACOS_* connection is incomplete (missing: host)",
+		},
+		{
+			name:           "incomplete profile with namespace environment",
+			profileContent: "host: 127.0.0.1\nauthType: nacos\nusername: nacos\n",
+			want:           "profile is incomplete (missing: password)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if tt.profileContent != "" {
+				profilePath := filepath.Join(home, ".nacos-cli", "default.conf")
+				if err := os.MkdirAll(filepath.Dir(profilePath), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(profilePath, []byte(tt.profileContent), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			command := exec.Command(os.Args[0], "-test.run=TestRootConfigHelperProcess")
+			command.Env = append(
+				os.Environ(),
+				"GO_WANT_ROOT_CONFIG_HELPER=1",
+				"HOME="+home,
+				"NACOS_NAMESPACE=environment-only-namespace",
+			)
+			output, err := command.CombinedOutput()
+			if err == nil {
+				t.Fatalf("machine-readable config-get should fail, output=%q", output)
+			}
+			if !strings.Contains(string(output), tt.want) {
+				t.Fatalf("machine-readable config-get output = %q, want %q", output, tt.want)
+			}
+			if strings.Contains(string(output), "Fetching config:") {
+				t.Fatalf("machine-readable failure wrote config output: %q", output)
+			}
+		})
+	}
+}
+
+func TestLoadMachineReadableConfigGetSourceUsesCompleteEnvironment(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NACOS_HOST", "127.0.0.1")
+	t.Setenv("NACOS_PORT", "8848")
+	t.Setenv("NACOS_NAMESPACE", "environment-namespace")
+	t.Setenv("NACOS_AUTH_TYPE", "none")
+	t.Setenv("NACOS_SCHEME", "http")
+
+	loaded, err := loadMachineReadableConfigGetSource("default", false)
+	if err != nil {
+		t.Fatalf("loadMachineReadableConfigGetSource() error = %v", err)
+	}
+	if loaded.Host != "127.0.0.1" || loaded.Port != 8848 || loaded.Namespace != "environment-namespace" {
+		t.Fatalf("environment config = %+v", loaded)
+	}
+}
+
+func TestRootConfigHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_ROOT_CONFIG_HELPER") != "1" {
+		return
+	}
+	rootCmd.SetArgs([]string{"config-get", "pagepop_agent_api", "DEFAULT_GROUP", "--output", "raw"})
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
 func skillSyncTestCommand(name string) *cobra.Command {
 	root := &cobra.Command{Use: "nacos-cli"}
 	sync := &cobra.Command{Use: "skill-sync"}
@@ -565,6 +645,8 @@ func resetRootConfigForTest(t *testing.T) {
 	originalProfileName := profileName
 	originalVerbose := verbose
 	originalConfigGetOutput := configGetOutput.format
+	originalConfigGetStrict := configGetStrict
+	originalConfigGetTokenStdin := configGetTokenStdin
 
 	serverAddr = ""
 	host = ""
@@ -584,6 +666,8 @@ func resetRootConfigForTest(t *testing.T) {
 	profileName = ""
 	verbose = false
 	configGetOutput.format = configGetOutputRaw
+	configGetStrict = false
+	configGetTokenStdin = false
 
 	t.Cleanup(func() {
 		serverAddr = originalServerAddr
@@ -604,5 +688,7 @@ func resetRootConfigForTest(t *testing.T) {
 		profileName = originalProfileName
 		verbose = originalVerbose
 		configGetOutput.format = originalConfigGetOutput
+		configGetStrict = originalConfigGetStrict
+		configGetTokenStdin = originalConfigGetTokenStdin
 	})
 }
