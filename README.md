@@ -16,43 +16,48 @@ A powerful command-line tool for managing Nacos configuration center and AI skil
 
 ## Installation
 
-### Official Installer
+### PagePop Installer
 
-Install `nacos-cli` with the Nacos installer:
+Install the latest published PagePop release on macOS or Linux:
 
 ```bash
-curl -fsSL https://nacos.io/nacos-installer.sh | bash -s -- --cli
+curl -fsSL https://raw.githubusercontent.com/pagepop/nacos-cli/main/scripts/install.sh | bash
 ```
 
-The installer adds `~/.nacos/bin` to your shell PATH and configures shell
-completion for zsh, bash, or fish when possible.
+The installer downloads only from `pagepop/nacos-cli`, verifies the release
+SHA-256 checksum, and installs the binary to `~/.nacos/bin/nacos-cli`. It exits
+with an error instead of falling back to an upstream build.
 
-### npm / npx
-
-After the npm package is published, use `npx` to run directly without
-installation:
+If `~/.nacos/bin` is not already in `PATH`, add it to your shell configuration:
 
 ```bash
-npx @nacos-group/cli --help
-npx @nacos-group/cli skill-list --host 127.0.0.1 --port 8848 -u nacos -p nacos
+export PATH="$HOME/.nacos/bin:$PATH"
 ```
 
-Or install globally via npm:
+Pin an exact PagePop version when reproducibility is required:
 
 ```bash
-npm install -g @nacos-group/cli
-nacos-cli --help
+curl -fsSL https://raw.githubusercontent.com/pagepop/nacos-cli/main/scripts/install.sh \
+  | bash -s -- --version 1.1.4-pagepop.1
+```
+
+Use a different absolute installation directory when needed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pagepop/nacos-cli/main/scripts/install.sh \
+  | bash -s -- --install-dir "$HOME/.local/bin"
 ```
 
 ### Download Binary
 
-Download the latest release from [GitHub Releases](https://github.com/nacos-group/nacos-cli/releases).
+Download platform archives and `checksums.txt` from the
+[PagePop GitHub Releases](https://github.com/pagepop/nacos-cli/releases).
 
 ### Build from Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/nacos-group/nacos-cli.git
+git clone https://github.com/pagepop/nacos-cli.git
 cd nacos-cli
 
 # Build
@@ -61,6 +66,9 @@ go build -o nacos-cli
 # Or use make
 make build
 ```
+
+The [official upstream repository](https://github.com/nacos-group/nacos-cli)
+publishes separate Nacos builds that do not include PagePop-specific changes.
 
 ## Shell Completion
 
