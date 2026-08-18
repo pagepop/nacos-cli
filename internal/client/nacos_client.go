@@ -103,6 +103,12 @@ type V3Response struct {
 	Data    json.RawMessage `json:"data"`
 }
 
+// getConfigData is the required data contract returned by the v3 config API.
+// A pointer distinguishes a missing content field from a valid empty config.
+type getConfigData struct {
+	Content *string `json:"content"`
+}
+
 // ParseHTTPError converts an HTTP error response into a user-friendly error message.
 // It handles common HTTP status codes with actionable hints.
 func ParseHTTPError(statusCode int, body []byte, operation string) error {
@@ -260,13 +266,13 @@ func (c *NacosClient) login() error {
 		resp, err := c.httpClient.R().SetFormData(form).Post(u)
 		if err != nil {
 			if !isLocal {
-				fmt.Printf("v3 login failed: %v\n", err)
+				fmt.Fprintf(os.Stderr, "[warn] v3 login failed: %v\n", err)
 			}
 		} else if resp != nil && resp.StatusCode() == 200 && c.applyLoginResponse(resp.Body()) {
 			c.authLoginVersion = "v3"
 			return nil
 		} else if !isLocal && resp != nil {
-			fmt.Printf("v3 login failed: status=%d, body=%s\n", resp.StatusCode(), string(resp.Body()))
+			fmt.Fprintf(os.Stderr, "[warn] v3 login failed: status=%d, body=%s\n", resp.StatusCode(), string(resp.Body()))
 		}
 	}
 
@@ -275,7 +281,7 @@ func (c *NacosClient) login() error {
 	resp, err := c.httpClient.R().SetFormData(form).Post(u)
 	if err != nil {
 		if !isLocal {
-			fmt.Printf("v1 login failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[warn] v1 login failed: %v\n", err)
 		}
 		return err
 	}
@@ -284,7 +290,7 @@ func (c *NacosClient) login() error {
 		return nil
 	}
 	if !isLocal && resp != nil {
-		fmt.Printf("v1 login failed: status=%d, body=%s\n", resp.StatusCode(), string(resp.Body()))
+		fmt.Fprintf(os.Stderr, "[warn] v1 login failed: status=%d, body=%s\n", resp.StatusCode(), string(resp.Body()))
 	}
 	return fmt.Errorf("login failed: status=%d", resp.StatusCode())
 }
@@ -683,25 +689,24 @@ func (c *NacosClient) GetConfig(dataID, group string) (string, error) {
 	// Parse v3 response
 	var v3Resp V3Response
 	if err := json.Unmarshal(resp.Body(), &v3Resp); err != nil {
-		// If not JSON, return raw content (for backward compatibility)
-		return string(resp.Body()), nil
+		return "", fmt.Errorf("decode get config response: %w", err)
 	}
 	if v3Resp.Code != 0 {
 		return "", fmt.Errorf("get config failed: code=%d, message=%s", v3Resp.Code, v3Resp.Message)
 	}
 
-	// Parse config from data
-	var config Config
-	if err := json.Unmarshal(v3Resp.Data, &config); err != nil {
-		// Try to return raw data as string
-		var rawContent string
-		if err := json.Unmarshal(v3Resp.Data, &rawContent); err != nil {
-			return string(v3Resp.Data), nil
-		}
-		return rawContent, nil
+	var data *getConfigData
+	if err := json.Unmarshal(v3Resp.Data, &data); err != nil {
+		return "", fmt.Errorf("decode get config response data: %w", err)
+	}
+	if data == nil {
+		return "", fmt.Errorf("get config response data is missing")
+	}
+	if data.Content == nil {
+		return "", fmt.Errorf("get config response data is missing content")
 	}
 
-	return config.Content, nil
+	return *data.Content, nil
 }
 
 // PublishConfigOptions contains optional metadata used when publishing config.

@@ -104,6 +104,19 @@ Examples:
 					fmt.Fprintf(os.Stderr, "Error: profile %q not found; create it with 'profile set' or pass --host/--port explicitly\n", profileName)
 					os.Exit(1)
 				}
+			} else if configGetUsesMachineReadableOutput(cmd) {
+				fileConfig, err = loadExistingConfigGetProfile(envName)
+				if err != nil {
+					fmt.Fprintf(
+						os.Stderr,
+						"Error: config-get --output %s requires a complete profile %q: %v; configure it with 'nacos-cli profile edit %s' or pass explicit connection flags\n",
+						configGetOutput.format,
+						config.NormalizeProfileName(envName),
+						err,
+						config.NormalizeProfileName(envName),
+					)
+					os.Exit(1)
+				}
 			} else {
 				// This will load, prompt for missing fields, and save
 				fileConfig, _, err = config.LoadOrCreateConfig(envName)
@@ -278,6 +291,33 @@ func isSkillSyncCommand(cmd *cobra.Command) bool {
 		strings.HasPrefix(path, "nacos-cli skill-sync ") ||
 		path == "skill-sync" ||
 		strings.HasPrefix(path, "skill-sync ")
+}
+
+// configGetUsesMachineReadableOutput reports whether stdout must contain only
+// the requested representation. These modes never start interactive profile setup.
+func configGetUsesMachineReadableOutput(cmd *cobra.Command) bool {
+	if cmd == nil || cmd.Name() != getConfigCmd.Name() {
+		return false
+	}
+	return configGetOutput.format == configGetOutputRaw || configGetOutput.format == configGetOutputJSON
+}
+
+// loadExistingConfigGetProfile loads a complete profile without prompting or
+// writing it. Machine-readable config-get must be safe to redirect from byte zero.
+func loadExistingConfigGetProfile(profile string) (*config.Config, error) {
+	profile = config.NormalizeProfileName(profile)
+	configPath, err := config.GetProfileConfigPath(profile)
+	if err != nil {
+		return nil, fmt.Errorf("resolve profile path: %w", err)
+	}
+	fileConfig, err := config.LoadConfig(configPath)
+	if err != nil {
+		return nil, err
+	}
+	if missing := fileConfig.GetMissingFields(); len(missing) > 0 {
+		return nil, fmt.Errorf("profile is incomplete (missing: %s)", strings.Join(missing, ", "))
+	}
+	return fileConfig, nil
 }
 
 func isSkillSyncModeLocalCommand(cmd *cobra.Command, args []string) bool {
