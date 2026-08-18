@@ -1,5 +1,6 @@
-# Build output (binaries distributed via npm/GitHub Release)
+# Build output (binaries distributed via GitHub Release)
 build/
+dist/
 
 # Binary executable
 nacos-cli

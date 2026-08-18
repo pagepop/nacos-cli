@@ -10,6 +10,24 @@ permissions:
   contents: read
 
 jobs:
+  distribution:
+    name: Distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate installer
+        run: |
+          test -x scripts/install.sh
+          bash -n scripts/install.sh
+          shellcheck scripts/install.sh
+
+      - name: Validate GoReleaser configuration
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -84,7 +102,7 @@ jobs:
         run: |
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          go build -o nacos-cli-${GOOS}-${GOARCH}${ext} -v .
+          go build -o "nacos-cli-${GOOS}-${GOARCH}${ext}" -v .
 
       - name: Upload binary
         uses: actions/upload-artifact@v4

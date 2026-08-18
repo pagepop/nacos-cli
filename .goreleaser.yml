@@ -34,6 +34,8 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+  # The installer verifies SHA-256 and treats any other checksum as invalid.
+  algorithm: sha256
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
@@ -58,8 +60,10 @@ changelog:
 
 release:
   github:
-    owner: nacos-group
+    # PagePop releases must stay in the fork instead of publishing to upstream.
+    owner: pagepop
     name: nacos-cli
   draft: false
-  prerelease: auto
+  # PagePop-suffixed team releases must remain discoverable through /releases/latest.
+  prerelease: false
   name_template: "v{{.Version}}"
