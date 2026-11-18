@@ -23,12 +23,15 @@ Install a PagePop nacos-cli release.
 
 Usage:
   install.sh [--version VERSION] [--install-dir ABSOLUTE_PATH]
+             [--require-command COMMAND] [--require-option --OPTION ...]
 
 Options:
   --version VERSION           Install an exact release, for example 1.1.4-pagepop.1.
                               Defaults to the most recently published release.
   --install-dir ABSOLUTE_PATH Install into this directory.
                               Defaults to $HOME/.nacos/bin.
+  --require-command COMMAND   Verify this CLI command before replacing the binary.
+  --require-option --OPTION   Verify a long option on that command; repeatable.
   -h, --help                  Show this help.
 
 Environment:
@@ -139,7 +142,7 @@ verify_checksum() {
 
   case "$release_os" in
     darwin)
-      actual_checksum="$(shasum -a 256 "$archive_file" | awk '{ print $1 }')"
+      actual_checksum="$(LC_ALL=C shasum -a 256 "$archive_file" | awk '{ print $1 }')"
       ;;
     linux)
       actual_checksum="$(sha256sum "$archive_file" | awk '{ print $1 }')"
@@ -158,6 +161,8 @@ verify_checksum() {
 
 requested_version="${NACOS_CLI_VERSION:-}"
 requested_install_dir="${NACOS_CLI_INSTALL_DIR:-}"
+required_command=""
+required_options=()
 
 while (( $# > 0 )); do
   case "$1" in
@@ -171,6 +176,18 @@ while (( $# > 0 )); do
       requested_install_dir="$2"
       shift 2
       ;;
+    --require-command)
+      (( $# >= 2 )) || fail "--require-command requires a value"
+      required_command="$2"
+      [[ "$required_command" =~ ^[a-z][a-z0-9-]*$ ]] || fail "Invalid required command"
+      shift 2
+      ;;
+    --require-option)
+      (( $# >= 2 )) || fail "--require-option requires a value"
+      [[ "$2" =~ ^--[a-z][a-z0-9-]*$ ]] || fail "Invalid required option"
+      required_options+=("$2")
+      shift 2
+      ;;
     -h | --help)
       usage
       exit 0
@@ -181,7 +198,12 @@ while (( $# > 0 )); do
   esac
 done
 
+if [[ -z "$required_command" && -n "${required_options[*]:-}" ]]; then
+  fail "--require-option requires --require-command"
+fi
+
 require_command awk
+require_command cp
 require_command curl
 require_command install
 require_command mktemp
@@ -251,13 +273,31 @@ if ! downloaded_version="$("$downloaded_binary" --version 2>&1)"; then
   fail "Downloaded binary failed its version check: $downloaded_version"
 fi
 case "$downloaded_version" in
-  "${BINARY_NAME} version ${release_version}"*)
+  "${BINARY_NAME} version ${release_version}" | "${BINARY_NAME} version ${release_version} "*)
     ;;
   *)
     fail "Downloaded binary version does not match ${release_tag}: $downloaded_version"
     ;;
 esac
 log_info "Verified executable: $downloaded_version"
+
+if [[ -n "$required_command" ]]; then
+  if ! downloaded_help="$("$downloaded_binary" "$required_command" --help 2>&1)"; then
+    fail "Downloaded CLI does not support command $required_command"
+  fi
+  if ! printf '%s\n' "$downloaded_help" | awk -v command="$required_command" \
+      '$0 ~ "^[[:space:]]*nacos-cli[[:space:]]+" command "([[:space:]]|$)" { found=1 } END { exit !found }'; then
+    fail "Downloaded CLI help does not describe command $required_command"
+  fi
+  for required_option in "${required_options[@]:-}"; do
+    [[ -n "$required_option" ]] || continue
+    if ! printf '%s\n' "$downloaded_help" | awk -v option="$required_option" \
+        '$0 ~ "(^|[[:space:],])" option "([[:space:]=,]|$)" { found=1 } END { exit !found }'; then
+      fail "Downloaded CLI command $required_command lacks option $required_option"
+    fi
+  done
+  log_info "Verified required command and options before replacing the binary"
+fi
 
 mkdir -p "$requested_install_dir"
 target_binary="${requested_install_dir}/${BINARY_NAME}"
@@ -274,8 +314,8 @@ install -m 0755 "$downloaded_binary" "$staged_binary"
 if [[ -f "$target_binary" ]]; then
   backup_dir="$(mktemp -d /tmp/nacos-cli-backup.XXXXXX)"
   backup_binary="${backup_dir}/${BINARY_NAME}"
-  mv -- "$target_binary" "$backup_binary"
-  log_info "Moved the previous binary to $backup_binary"
+  cp -p -- "$target_binary" "$backup_binary"
+  log_info "Saved the previous binary to $backup_binary"
 fi
 
 if ! mv -- "$staged_binary" "$target_binary"; then

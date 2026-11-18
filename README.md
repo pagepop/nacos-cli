@@ -48,6 +48,20 @@ curl -fsSL https://raw.githubusercontent.com/pagepop/nacos-cli/main/scripts/inst
   | bash -s -- --install-dir "$HOME/.local/bin"
 ```
 
+Automation can require a command and its options before the installer replaces an
+existing binary. An incompatible download fails while preserving the previous
+installation:
+
+```bash
+bash scripts/install.sh --require-command role-list \
+  --require-option --all --require-option --output
+```
+
+The installer verifies the exact release version, the requested command's help,
+and each required option before saving a backup and atomically replacing the
+previous executable. A failed replacement leaves the previous executable and
+its backup intact.
+
 ### Download Binary
 
 Download platform archives and `checksums.txt` from the
@@ -534,6 +548,44 @@ nacos-cli config-set myconfig DEFAULT_GROUP -f ./application.yaml
 # Preserve config type metadata, such as yaml
 nacos-cli config-set myconfig DEFAULT_GROUP -f ./application.yaml --type yaml
 ```
+
+### User, Role and Permission Management
+
+These CLI commands use the Nacos 3.x `/v3/auth` APIs with `nacos` or `token`
+authentication. Select an existing profile explicitly with `--profile`, or use
+`--config` with an existing file. They read encrypted profile credentials without
+prompting, creating profiles or rewriting them. Connection overrides and implicit
+default profiles are rejected for these commands.
+
+```bash
+nacos-cli --profile prod user-list --user LDAP_example7 --search accurate --all
+nacos-cli --profile prod role-list --user LDAP_example7 --all
+nacos-cli --profile prod role-list --role ROLE_EXAMPLE --all
+nacos-cli --profile prod permission-list --role ROLE_EXAMPLE --all
+
+# Preview each mutation without logging in or contacting Nacos.
+nacos-cli --profile prod role-bind --role ROLE_EXAMPLE --user LDAP_example7 --dry-run
+nacos-cli --profile prod permission-add --role ROLE_EXAMPLE \
+  --resource 'online:DEFAULT_GROUP:config/example' --action rw --dry-run
+nacos-cli --profile prod role-unbind --role ROLE_EXAMPLE --user LDAP_example7 --dry-run
+nacos-cli --profile prod permission-remove --role ROLE_EXAMPLE \
+  --resource 'online:DEFAULT_GROUP:config/example' --action rw --dry-run
+```
+
+Remove `--dry-run` only when the displayed mutation is authorized. Mutations query
+the current record, perform at most one write, then read it back. `changed: false`
+with `already_present` or `already_absent` reports an existing target state.
+A failed or mismatching readback returns an error, even when Nacos accepted the
+write. Inspect the current records before retrying an uncertain result.
+
+`--user` selects the target account. Role unbinding requires both the exact role
+and a non-empty username and cannot delete all bindings for a role. Permission
+changes affect every member of that role. The `w` action includes deletion as well
+as creation, updates and publishing. User-list output excludes password fields.
+Results default to JSON; `--output pretty` indents the JSON. Lists support
+`--page`, `--size`, `--search accurate|blur`, and `--all`. `--all` starts at page 1
+and rejects incomplete, repeated or changing pagination. These commands are
+available in CLI mode, not the interactive terminal.
 
 ### Terminal Commands
 
